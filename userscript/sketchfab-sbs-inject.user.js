@@ -39,7 +39,7 @@
   const NORMAL_PIPELINE_IPD_METERS = 0.064;
   const RUNTIME_CLICK_GUARD = false;
   const TELEPORT_SHADER_GUARD = false;
-  const SCRIPT_VERSION = '2026-05-18-normal-pipeline-stereo';
+  const SCRIPT_VERSION = '2026-05-18-normal-pipeline-after-loaded';
 
   const state = window.__skfbSbs = window.__skfbSbs || {
     scriptVersion: SCRIPT_VERSION,
@@ -823,7 +823,7 @@
 
         state.normalPipelineStereo = {
           mode: 'normal-camera-postprocess-stereo',
-          disabledWebVrFeatures: disabled,
+          disabledWebVrFeatures: null,
           framebufferWidth,
           framebufferHeight,
           leftRenderWidth,
@@ -858,8 +858,16 @@
       record('normal canvas sizing');
     }
 
+    function isSketchfabViewerModelLoaded() {
+      const viewer = document.querySelector('main.viewer,main[aria-label="sketchfab-viewer"]');
+      return /\bmodel-loaded\b/.test(String(viewer && viewer.className || ''));
+    }
+
     function restoreNormalFeaturePipeline(view) {
       if (!NORMAL_PIPELINE_STEREO || !view || !view._viewer || typeof view._viewer.getFeatures !== 'function') {
+        return;
+      }
+      if (!isSketchfabViewerModelLoaded()) {
         return;
       }
 
@@ -868,14 +876,13 @@
       for (const name of ['background', 'camera', 'hotspot', 'shadingStyle', 'lighting', 'postProcess']) {
         if (setModelFlag(getFeatureModel(features, name), 'webVR', false)) disabled.push(name);
       }
-
       const postProcess = getFeatureModel(features, 'postProcess');
       setModelFlag(postProcess, 'doDistortionVR', false);
 
       const renderInfo = applyNormalStereoRenderConfig(view, null, true);
       if (renderInfo) renderInfo.disabledWebVrFeatures = disabled;
 
-      if (!state.normalPipelineCameraRestored && /\bmodel-loaded\b/.test(String(document.querySelector('main.viewer,main[aria-label="sketchfab-viewer"]')?.className || ''))) {
+      if (!state.normalPipelineCameraRestored) {
         try {
           const manager = view._viewer && typeof view._viewer.getFeaturesManager === 'function'
             ? view._viewer.getFeaturesManager()
@@ -888,6 +895,15 @@
       }
 
       record('normal pipeline stereo');
+    }
+
+    function safelyRestoreNormalFeaturePipeline(view) {
+      try {
+        restoreNormalFeaturePipeline(view);
+      } catch (error) {
+        state.normalPipelineError = String(error && (error.stack || error.message) || error);
+        warn('normal pipeline restore failed', error);
+      }
     }
 
     function patchCardboardHalfSbs(target, label) {
@@ -937,8 +953,7 @@
 
     function patchWebVrView(view) {
       if (!view) return;
-      patchNormalCanvasSizing(view);
-      restoreNormalFeaturePipeline(view);
+      safelyRestoreNormalFeaturePipeline(view);
       patchCardboardHalfSbs(view, 'live half-sbs cardboard hmd');
       patchController(view._controllerMT);
       patchTeleportNode(view._teleportNode);
@@ -1011,7 +1026,7 @@
           if (typeof startEnable === 'function') {
             proto.startEnable = function patchedStartEnable() {
               const result = startEnable.apply(this, arguments);
-              restoreNormalFeaturePipeline(this);
+              safelyRestoreNormalFeaturePipeline(this);
               return result;
             };
           }
@@ -1020,7 +1035,7 @@
             proto.update = function patchedWebVrUpdate() {
               patchWebVrView(this);
               const result = update.apply(this, arguments);
-              restoreNormalFeaturePipeline(this);
+              safelyRestoreNormalFeaturePipeline(this);
               return result;
             };
           }
