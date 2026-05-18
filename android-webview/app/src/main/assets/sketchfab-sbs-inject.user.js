@@ -37,7 +37,7 @@
   const HALF_SBS_PROJECTION_X_SCALE = 0.5;
   const RUNTIME_CLICK_GUARD = false;
   const TELEPORT_SHADER_GUARD = false;
-  const SCRIPT_VERSION = '2026-05-18-model-loaded-orbit';
+  const SCRIPT_VERSION = '2026-05-18-staffpicks-osd-hidden';
 
   const state = window.__skfbSbs = window.__skfbSbs || {
     scriptVersion: SCRIPT_VERSION,
@@ -55,6 +55,7 @@
     halfSbsMode: HALF_SBS ? 'live-cardboard-projection' : 'off',
     halfSbsCardboardViewport: null,
     halfSbsProjectionPatch: null,
+    osdHidden: false,
     lastOrbitAttempt: null
   };
   state.scriptVersion = SCRIPT_VERSION;
@@ -67,6 +68,24 @@
 
   const log = (...args) => console.info('[skfb-sbs]', ...args);
   const warn = (...args) => console.warn('[skfb-sbs]', ...args);
+
+  function hideSketchfabOsd() {
+    const install = () => {
+      if (!document.documentElement) return false;
+      if (!document.getElementById('skfb-sbs-hide-osd')) {
+        const style = document.createElement('style');
+        style.id = 'skfb-sbs-hide-osd';
+        style.textContent = '.osd{visibility:hidden!important;}';
+        (document.head || document.documentElement).appendChild(style);
+      }
+      state.osdHidden = true;
+      return true;
+    };
+
+    if (!install()) {
+      document.addEventListener('DOMContentLoaded', install, { once: true });
+    }
+  }
 
   function normalizeUrl() {
     const url = new URL(location.href);
@@ -918,6 +937,7 @@
     patchExports();
   }
 
+  hideSketchfabOsd();
   normalizeUrl();
   patchEventInputs();
   if (RUNTIME_CLICK_GUARD) patchTeleportClickEvents();
