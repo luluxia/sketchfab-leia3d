@@ -35,9 +35,11 @@
   const HIDE_VR_WIDGETS = true;
   const HALF_SBS = true;
   const HALF_SBS_PROJECTION_X_SCALE = 0.5;
+  const NORMAL_PIPELINE_STEREO = true;
+  const NORMAL_PIPELINE_IPD_METERS = 0.064;
   const RUNTIME_CLICK_GUARD = false;
   const TELEPORT_SHADER_GUARD = false;
-  const SCRIPT_VERSION = '2026-05-18-staffpicks-osd-hidden';
+  const SCRIPT_VERSION = '2026-05-18-normal-pipeline-stereo';
 
   const state = window.__skfbSbs = window.__skfbSbs || {
     scriptVersion: SCRIPT_VERSION,
@@ -55,6 +57,7 @@
     halfSbsMode: HALF_SBS ? 'live-cardboard-projection' : 'off',
     halfSbsCardboardViewport: null,
     halfSbsProjectionPatch: null,
+    normalPipelineStereo: null,
     osdHidden: false,
     lastOrbitAttempt: null
   };
@@ -62,6 +65,7 @@
   state.halfSbsMode = HALF_SBS ? 'live-cardboard-projection' : 'off';
   state.halfSbsCardboardViewport = state.halfSbsCardboardViewport || null;
   state.halfSbsProjectionPatch = state.halfSbsProjectionPatch || null;
+  state.normalPipelineStereo = state.normalPipelineStereo || null;
   state.blockedTeleportEvents = state.blockedTeleportEvents || [];
   state.runtimePatches = state.runtimePatches || [];
   state.shaderPatches = state.shaderPatches || [];
@@ -536,6 +540,10 @@
       [
         'doTeleport:function(e,t,i){var n=this._viewer.getFeaturesManager();e[2]+=this.getEyeLevel(),t[2]+=this.getEyeLevel(),n.focusOnTargetAndEye(t,e),this.toggleHotspotCard(i)}',
         'doTeleport:function(e,t,i){return}'
+      ],
+      [
+        't.background.getModel().set("webVR",e&&!(0,l.Z)().vrAr),t.camera.getModel().set("webVR",e),t.hotspot.getModel().set("webVR",e),t.shadingStyle.getModel().set("webVR",e),t.lighting.getModel().set("webVR",e),t.postProcess.getModel().set("webVR",e),',
+        't.background.getModel().set("webVR",false),t.camera.getModel().set("webVR",false),t.hotspot.getModel().set("webVR",false),t.shadingStyle.getModel().set("webVR",false),t.lighting.getModel().set("webVR",false),t.postProcess.getModel().set("webVR",false),'
       ]
     ];
 
@@ -792,6 +800,170 @@
       record('live cursor node methods');
     }
 
+    function setIdentityTranslation(matrix, x, y, z) {
+      if (!matrix || matrix.length < 16) return false;
+      matrix[0] = 1; matrix[1] = 0; matrix[2] = 0; matrix[3] = 0;
+      matrix[4] = 0; matrix[5] = 1; matrix[6] = 0; matrix[7] = 0;
+      matrix[8] = 0; matrix[9] = 0; matrix[10] = 1; matrix[11] = 0;
+      matrix[12] = x; matrix[13] = y; matrix[14] = z; matrix[15] = 1;
+      return true;
+    }
+
+    function copyMat4(dst, src) {
+      if (!dst || !src || dst.length < 16 || src.length < 16) return false;
+      for (let i = 0; i < 16; i += 1) dst[i] = src[i];
+      return true;
+    }
+
+    function getFeatureModel(features, name) {
+      const feature = features && features[name];
+      return feature && typeof feature.getModel === 'function' ? feature.getModel() : null;
+    }
+
+    function setModelFlag(model, key, value) {
+      if (!model || typeof model.set !== 'function') return false;
+      try {
+        if (typeof model.get === 'function' && model.get(key) === value) return false;
+        model.set(key, value);
+        return true;
+      } catch {
+        return false;
+      }
+    }
+
+    function applyNormalStereoRenderConfig(view, canvasOverride, resizeCanvas) {
+      const cfg = view._cullConfig;
+      const osgViewer = view._viewerOSGJS;
+      const camera = view._viewer && typeof view._viewer.getCamera === 'function'
+        ? view._viewer.getCamera()
+        : osgViewer && typeof osgViewer.getCamera === 'function'
+          ? osgViewer.getCamera()
+          : null;
+      const canvas = canvasOverride || (view._viewer && typeof view._viewer.getCanvas === 'function'
+        ? view._viewer.getCanvas()
+        : osgViewer && typeof osgViewer.getGraphicContext === 'function'
+          ? osgViewer.getGraphicContext().canvas
+          : null);
+
+      if (cfg) {
+        cfg.doVR = true;
+
+        const dpr = osgViewer && typeof osgViewer.getCanvasPixelRatio === 'function'
+          ? osgViewer.getCanvasPixelRatio()
+          : Math.min(window.devicePixelRatio || 1, 1.5);
+        const clientWidth = Math.max(1, canvas && (canvas.clientWidth || Math.round((canvas.width || 1) / dpr)) || window.innerWidth || 1);
+        const clientHeight = Math.max(1, canvas && (canvas.clientHeight || Math.round((canvas.height || 1) / dpr)) || window.innerHeight || 1);
+        const framebufferWidth = Math.max(2, Math.floor(clientWidth * dpr));
+        const framebufferHeight = Math.max(1, Math.floor(clientHeight * dpr));
+        const leftRenderWidth = Math.floor(framebufferWidth / 2);
+        const rightRenderWidth = framebufferWidth - leftRenderWidth;
+        let changedCanvas = false;
+
+        if (resizeCanvas && canvas) {
+          if (canvas.width !== framebufferWidth) {
+            canvas.width = framebufferWidth;
+            changedCanvas = true;
+          }
+          if (canvas.height !== framebufferHeight) {
+            canvas.height = framebufferHeight;
+            changedCanvas = true;
+          }
+        }
+
+        if (osgViewer) {
+          osgViewer._canvasWidth = framebufferWidth;
+          osgViewer._canvasHeight = framebufferHeight;
+        }
+
+        cfg.framebufferWidth = framebufferWidth;
+        cfg.framebufferHeight = framebufferHeight;
+        cfg.leftRenderWidth = leftRenderWidth;
+        cfg.rightRenderWidth = rightRenderWidth;
+        cfg.leftRenderHeight = framebufferHeight;
+        cfg.rightRenderHeight = framebufferHeight;
+
+        const projection = camera && typeof camera.getProjectionMatrix === 'function'
+          ? camera.getProjectionMatrix()
+          : null;
+        copyMat4(cfg.leftProjection, projection);
+        copyMat4(cfg.rightProjection, projection);
+
+        const worldFactor = view.model && typeof view.model.get === 'function'
+          ? Number(view.model.get('worldFactor')) || 1
+          : 1;
+        const halfIpd = NORMAL_PIPELINE_IPD_METERS * 0.5 * worldFactor;
+        setIdentityTranslation(cfg.leftOffsetView, halfIpd, 0, 0);
+        setIdentityTranslation(cfg.rightOffsetView, -halfIpd, 0, 0);
+
+        state.normalPipelineStereo = {
+          mode: 'normal-camera-postprocess-stereo',
+          disabledWebVrFeatures: disabled,
+          framebufferWidth,
+          framebufferHeight,
+          leftRenderWidth,
+          rightRenderWidth,
+          dpr,
+          projectionCopied: !!projection,
+          halfIpd,
+          canvasWidth: canvas ? canvas.width : null,
+          canvasHeight: canvas ? canvas.height : null,
+          changedCanvas
+        };
+        return state.normalPipelineStereo;
+      }
+      return null;
+    }
+
+    function patchNormalCanvasSizing(view) {
+      const osgViewer = view && view._viewerOSGJS;
+      if (!NORMAL_PIPELINE_STEREO || !osgViewer || osgViewer.__skfbSbsNormalCanvasSizingPatched) return;
+      const computeCanvasSize = osgViewer.computeCanvasSize;
+      if (typeof computeCanvasSize !== 'function') return;
+
+      osgViewer.computeCanvasSize = function patchedNormalPipelineComputeCanvasSize(canvas) {
+        if (view.model && typeof view.model.get === 'function' && view.model.get('enable')) {
+          const info = applyNormalStereoRenderConfig(view, canvas, true);
+          return !!(info && info.changedCanvas);
+        }
+        return computeCanvasSize.apply(this, arguments);
+      };
+
+      Object.defineProperty(osgViewer, '__skfbSbsNormalCanvasSizingPatched', { value: true });
+      record('normal canvas sizing');
+    }
+
+    function restoreNormalFeaturePipeline(view) {
+      if (!NORMAL_PIPELINE_STEREO || !view || !view._viewer || typeof view._viewer.getFeatures !== 'function') {
+        return;
+      }
+
+      const features = view._viewer.getFeatures();
+      const disabled = [];
+      for (const name of ['background', 'camera', 'hotspot', 'shadingStyle', 'lighting', 'postProcess']) {
+        if (setModelFlag(getFeatureModel(features, name), 'webVR', false)) disabled.push(name);
+      }
+
+      const postProcess = getFeatureModel(features, 'postProcess');
+      setModelFlag(postProcess, 'doDistortionVR', false);
+
+      const renderInfo = applyNormalStereoRenderConfig(view, null, true);
+      if (renderInfo) renderInfo.disabledWebVrFeatures = disabled;
+
+      if (!state.normalPipelineCameraRestored && /\bmodel-loaded\b/.test(String(document.querySelector('main.viewer,main[aria-label="sketchfab-viewer"]')?.className || ''))) {
+        try {
+          const manager = view._viewer && typeof view._viewer.getFeaturesManager === 'function'
+            ? view._viewer.getFeaturesManager()
+            : null;
+          if (manager && typeof manager.focusOnSavedCamera === 'function') {
+            manager.focusOnSavedCamera(0);
+            state.normalPipelineCameraRestored = true;
+          }
+        } catch {}
+      }
+
+      record('normal pipeline stereo');
+    }
+
     function patchCardboardHalfSbs(target, label) {
       if (!HALF_SBS || !target || target.__skfbSbsHalfSbsCardboardPatched) return;
       if (typeof target.getConfigCardboard !== 'function') return;
@@ -839,6 +1011,8 @@
 
     function patchWebVrView(view) {
       if (!view) return;
+      patchNormalCanvasSizing(view);
+      restoreNormalFeaturePipeline(view);
       patchCardboardHalfSbs(view, 'live half-sbs cardboard hmd');
       patchController(view._controllerMT);
       patchTeleportNode(view._teleportNode);
@@ -907,11 +1081,21 @@
         if (!proto) return false;
 
         if (!proto.__skfbSbsWebVrViewPatched) {
+          const startEnable = proto.startEnable;
+          if (typeof startEnable === 'function') {
+            proto.startEnable = function patchedStartEnable() {
+              const result = startEnable.apply(this, arguments);
+              restoreNormalFeaturePipeline(this);
+              return result;
+            };
+          }
           const update = proto.update;
           if (typeof update === 'function') {
             proto.update = function patchedWebVrUpdate() {
               patchWebVrView(this);
-              return update.apply(this, arguments);
+              const result = update.apply(this, arguments);
+              restoreNormalFeaturePipeline(this);
+              return result;
             };
           }
           proto.doTeleport = function disabledPrototypeDoTeleport() {};
