@@ -153,7 +153,6 @@ class MainActivity : Activity() {
                 Log.i(TAG, "page finished: $url")
                 if (isViewer && isEmbedUrl(url)) {
                     scheduleInjection("finished")
-                    scheduleViewerReadyFallback("pageFinished", ++viewerReadyGeneration)
                 }
             }
 
@@ -229,14 +228,6 @@ class MainActivity : Activity() {
         enableLeia3D()
     }
 
-    private fun scheduleViewerReadyFallback(reason: String, generation: Int) {
-        handler.postDelayed({
-            if (viewerMode && !cnsdkActive && generation == viewerReadyGeneration) {
-                onViewerReadyFor3D("$reason fallback delay")
-            }
-        }, VIEWER_READY_FALLBACK_DELAY_MS)
-    }
-
     private fun enableLeia3D() {
         ensureCameraPermission()
         preferRefreshRate(TARGET_REFRESH_RATE)
@@ -310,148 +301,34 @@ class MainActivity : Activity() {
             ;(function(){
               if (window.__skfbLeiaReadyProbeVersion === '$SCRIPT_VERSION' && window.__skfbLeiaReadyProbeInstalled) return;
               var done = false;
-              var sawLoadingUi = false;
-              var progressComplete = false;
-              var progressLeftViewport = false;
-              var observedProgressElements = [];
               var startedAt = Date.now();
-              function visible(el) {
-                if (!el || !el.getBoundingClientRect) return false;
-                var style = window.getComputedStyle(el);
-                if (!style || style.display === 'none' || style.visibility === 'hidden' || Number(style.opacity) === 0) return false;
-                var rect = el.getBoundingClientRect();
-                return rect.width > 1 && rect.height > 1;
+              function getViewerMain() {
+                return document.querySelector('main[aria-label="sketchfab-viewer"],main.viewer');
               }
-              function describeElement(el) {
-                if (!el) return null;
-                var rawClassName = typeof el.className === 'string' ? el.className : String(el.getAttribute && el.getAttribute('class') || '');
-                var rawText = String(el.textContent || '').replace(/\s+/g, ' ').trim();
+              function viewerSnapshot(viewer) {
                 return {
-                  tag: String(el.tagName || '').toLowerCase(),
-                  className: rawClassName.slice(0, 160),
-                  id: String(el.id || '').slice(0, 80),
-                  text: rawText.slice(0, 120),
-                  visible: visible(el),
-                  connected: !!el.isConnected,
-                  parsedPercent: parsePercent(rawText)
+                  source: 'main-model-loaded-probe',
+                  reason: 'main-model-loaded-class',
+                  elapsedMs: Date.now() - startedAt,
+                  readyState: document.readyState,
+                  viewerClass: viewer ? String(viewer.className || '') : '',
+                  viewerAriaLabel: viewer ? String(viewer.getAttribute('aria-label') || '') : '',
+                  canvasCount: document.querySelectorAll('canvas').length
                 };
               }
-              function parsePercent(text) {
-                var match = String(text || '').match(/(\d+(?:\.\d+)?)\s*%/);
-                return match ? Number(match[1]) : NaN;
-              }
-              function baseReadyNow() {
-                var s = window.__skfbSbs || {};
-                var modules = s.patchedModules || [];
-                var canvas = document.querySelector('canvas');
-                return document.readyState === 'complete' &&
-                  !!canvas && canvas.width > 0 && canvas.height > 0 &&
-                  modules.indexOf('U6YP') !== -1 &&
-                  (s.webpackPushSeen || 0) > 0;
-              }
-              function notifyIfReady(reason, details) {
-                if (!baseReadyNow()) return false;
-                notify(reason, details);
-                return true;
-              }
-              function inspectSketchfabLoadingUi() {
-                var selectors = [
-                  'main.viewer',
-                  '.loading-container',
-                  '.main-progress',
-                  '.main-progress-wrapper',
-                  '.main-progress-percentage.loading-percentage',
-                  '.main-progress-display',
-                  '.main-progress-display__progress',
-                  '.secondary-progress',
-                  '.secondary-progress-percentage'
-                ];
-                var candidates = Array.prototype.slice.call(document.querySelectorAll(selectors.join(',')));
-                var visibleLoading = 0;
-                var maxProgress = 0;
-                var samples = [];
-                for (var i = 0; i < candidates.length; i++) {
-                  var el = candidates[i];
-                  var isVisible = visible(el);
-                  var rawClassName = typeof el.className === 'string' ? el.className : String(el.getAttribute && el.getAttribute('class') || '');
-                  var rawText = String(el.textContent || '').replace(/\s+/g, ' ').trim();
-                  var percent = parsePercent(rawText);
-                  if (!isNaN(percent)) {
-                    maxProgress = Math.max(maxProgress, percent);
-                  }
-                  var looksLikeLoading = /(?:^|\s)(?:loading-container|main-progress|main-progress-wrapper|secondary-progress)(?:\s|$)/.test(rawClassName);
-                  if (isVisible && looksLikeLoading) visibleLoading++;
-                  if (isVisible && looksLikeLoading && observedProgressElements.indexOf(el) === -1) {
-                    observedProgressElements.push(el);
-                    if (window.__skfbLeiaProgressIntersectionObserver) {
-                      window.__skfbLeiaProgressIntersectionObserver.observe(el);
-                    }
-                  }
-                  if (samples.length < 18) {
-                    samples.push({
-                      tag: String(el.tagName || '').toLowerCase(),
-                      className: rawClassName.slice(0, 160),
-                      id: String(el.id || '').slice(0, 80),
-                      role: String(el.getAttribute && el.getAttribute('role') || ''),
-                      ariaValueNow: String(el.getAttribute && el.getAttribute('aria-valuenow') || ''),
-                      ariaValueText: String(el.getAttribute && el.getAttribute('aria-valuetext') || ''),
-                      text: rawText.slice(0, 120),
-                      visible: isVisible,
-                      parsedPercent: isNaN(percent) ? null : percent
-                    });
-                  }
-                }
-                if (visibleLoading > 0 || maxProgress > 0) sawLoadingUi = true;
-                if (maxProgress >= 99) progressComplete = true;
-                var viewer = document.querySelector('main.viewer');
-                var viewerClass = viewer ? String(viewer.className || '') : '';
-                return {
-                  visibleLoading: visibleLoading,
-                  maxProgress: maxProgress,
-                  progressComplete: progressComplete,
-                  observedProgressElements: observedProgressElements.length,
-                  viewerClass: viewerClass,
-                  modelLoaded: /\bmodel-loaded\b/.test(viewerClass),
-                  modelLoading: /\bmodel-loading\b/.test(viewerClass),
-                  samples: samples
-                };
-              }
-              function notify(reason, details) {
+              function notify(viewer) {
                 if (done) return;
                 done = true;
-                var s = window.__skfbSbs || {};
-                var canvas = document.querySelector('canvas');
                 if (window.CNSDKBridge && window.CNSDKBridge.viewerReadyFor3D) {
-                  window.CNSDKBridge.viewerReadyFor3D(JSON.stringify(Object.assign({
-                    source: 'loading-ui-probe',
-                    reason: reason,
-                    elapsedMs: Date.now() - startedAt,
-                    readyState: document.readyState,
-                    canvasWidth: canvas ? canvas.width : 0,
-                    canvasHeight: canvas ? canvas.height : 0,
-                    patchedModules: s.patchedModules || [],
-                    webpackPushSeen: s.webpackPushSeen || 0
-                  }, details || {})));
+                  window.CNSDKBridge.viewerReadyFor3D(JSON.stringify(viewerSnapshot(viewer)));
                 }
               }
               function tick(){
                 if (done) return;
-                var loading = inspectSketchfabLoadingUi();
-                if (progressLeftViewport && notifyIfReady('progress-intersection-hidden', loading)) {
-                  return;
+                var viewer = getViewerMain();
+                if (viewer && /\bmodel-loaded\b/.test(String(viewer.className || ''))) {
+                  notify(viewer);
                 }
-                if (sawLoadingUi && progressComplete && loading.visibleLoading === 0 && notifyIfReady('progress-dom-hidden', loading)) {
-                  return;
-                }
-                for (var i = 0; i < observedProgressElements.length; i++) {
-                  var el = observedProgressElements[i];
-                  if (el && (!el.isConnected || !visible(el))) {
-                    if (notifyIfReady('progress-element-hidden', Object.assign(loading, { hiddenElement: describeElement(el) }))) {
-                      return;
-                    }
-                  }
-                }
-                setTimeout(tick, 120);
               }
               function install() {
                 if (!document.documentElement) {
@@ -460,25 +337,8 @@ class MainActivity : Activity() {
                 }
                 window.__skfbLeiaReadyProbeVersion = '$SCRIPT_VERSION';
                 window.__skfbLeiaReadyProbeInstalled = true;
-                window.__skfbLeiaProgressIntersectionObserver = 'IntersectionObserver' in window ? new IntersectionObserver(function(entries) {
-                  for (var i = 0; i < entries.length; i++) {
-                    var entry = entries[i];
-                    if (sawLoadingUi && (entry.isIntersecting === false || entry.intersectionRatio <= 0)) {
-                      progressLeftViewport = true;
-                      if (notifyIfReady('progress-intersection-hidden', Object.assign(inspectSketchfabLoadingUi(), {
-                        intersection: {
-                          isIntersecting: entry.isIntersecting,
-                          intersectionRatio: entry.intersectionRatio
-                        },
-                        hiddenElement: describeElement(entry.target)
-                      }))) {
-                        return;
-                      }
-                    }
-                  }
-                }, { threshold: [0, 0.01] }) : null;
                 var observer = new MutationObserver(tick);
-                observer.observe(document.documentElement, { childList: true, subtree: true, attributes: true, attributeFilter: ['class', 'style'] });
+                observer.observe(document.documentElement, { childList: true, subtree: true, attributes: true, attributeFilter: ['class'] });
                 tick();
               }
               install();
@@ -666,7 +526,6 @@ class MainActivity : Activity() {
                 "&navigation=orbit&vr_ar=1"
         private const val CAMERA_REQUEST_CODE = 42
         private const val TARGET_REFRESH_RATE = 144f
-        private const val VIEWER_READY_FALLBACK_DELAY_MS = 20000L
         private val FPS_UNLOCK_RETRY_DELAYS_MS = longArrayOf(1200L, 2200L, 3400L, 4800L)
         private val MODEL_ID_AT_END = Pattern.compile("([0-9a-fA-F]{32})(?:/)?$")
         private val DIRECT_MODEL_PATH = Pattern.compile("^/models/([0-9a-fA-F]{32})/?$")
