@@ -37,9 +37,12 @@
   const HALF_SBS_PROJECTION_X_SCALE = 0.5;
   const NORMAL_PIPELINE_STEREO = true;
   const NORMAL_PIPELINE_IPD_METERS = 0.064;
+  const NORMAL_PIPELINE_MAX_DPR = 1;
+  const NORMAL_PIPELINE_MAX_FRAMEBUFFER_WIDTH = 2560;
+  const NORMAL_PIPELINE_MAX_FRAMEBUFFER_HEIGHT = 1440;
   const RUNTIME_CLICK_GUARD = false;
   const TELEPORT_SHADER_GUARD = false;
-  const SCRIPT_VERSION = '2026-05-18-normal-pipeline-stereo';
+  const SCRIPT_VERSION = '2026-05-18-normal-pipeline-stereo-dpr1';
 
   const state = window.__skfbSbs = window.__skfbSbs || {
     scriptVersion: SCRIPT_VERSION,
@@ -848,13 +851,24 @@
       if (cfg) {
         cfg.doVR = true;
 
-        const dpr = osgViewer && typeof osgViewer.getCanvasPixelRatio === 'function'
+        const rawDpr = osgViewer && typeof osgViewer.getCanvasPixelRatio === 'function'
           ? osgViewer.getCanvasPixelRatio()
           : Math.min(window.devicePixelRatio || 1, 1.5);
+        let dpr = Math.min(rawDpr || 1, NORMAL_PIPELINE_MAX_DPR);
         const clientWidth = Math.max(1, canvas && (canvas.clientWidth || Math.round((canvas.width || 1) / dpr)) || window.innerWidth || 1);
         const clientHeight = Math.max(1, canvas && (canvas.clientHeight || Math.round((canvas.height || 1) / dpr)) || window.innerHeight || 1);
-        const framebufferWidth = Math.max(2, Math.floor(clientWidth * dpr));
-        const framebufferHeight = Math.max(1, Math.floor(clientHeight * dpr));
+        let framebufferWidth = Math.max(2, Math.floor(clientWidth * dpr));
+        let framebufferHeight = Math.max(1, Math.floor(clientHeight * dpr));
+        const budgetScale = Math.min(
+          1,
+          NORMAL_PIPELINE_MAX_FRAMEBUFFER_WIDTH / framebufferWidth,
+          NORMAL_PIPELINE_MAX_FRAMEBUFFER_HEIGHT / framebufferHeight
+        );
+        if (budgetScale < 1) {
+          dpr *= budgetScale;
+          framebufferWidth = Math.max(2, Math.floor(clientWidth * dpr));
+          framebufferHeight = Math.max(1, Math.floor(clientHeight * dpr));
+        }
         const leftRenderWidth = Math.floor(framebufferWidth / 2);
         const rightRenderWidth = framebufferWidth - leftRenderWidth;
         let changedCanvas = false;
@@ -903,6 +917,9 @@
           leftRenderWidth,
           rightRenderWidth,
           dpr,
+          rawDpr,
+          maxDpr: NORMAL_PIPELINE_MAX_DPR,
+          budgetScale,
           projectionCopied: !!projection,
           halfIpd,
           canvasWidth: canvas ? canvas.width : null,
