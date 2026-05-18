@@ -415,7 +415,7 @@ rightProjection[0] *= 0.5
 
 This widens the horizontal FOV used for each eye while keeping the same half-screen viewport, producing the horizontal compression expected by half-SBS. For asymmetric frusta, the center offset term should usually remain unchanged.
 
-That projection approach proved fragile during later testing. A WebGL uniform-level attempt caused the left eye to lose material/shading on the coffee cup test model.
+Changing projection uniforms globally proved fragile during later testing. A WebGL uniform-level attempt caused the left eye to lose material/shading on the coffee cup test model.
 
 The current source finding is more useful: Cardboard render size does not come from `canvas.clientWidth`. The chain is:
 
@@ -430,34 +430,41 @@ cullConfig.framebufferWidth = 2 * leftRenderWidth
 viewerOSGJS.computeCanvasSize() writes canvas.width = cullConfig.framebufferWidth
 ```
 
-So the stable intervention point is the fake Cardboard HMD eye parameters, not the canvas resize hook. The current userscript wraps the live `webVR` view/prototype `getConfigCardboard()` and replaces `hmd.getEyeParameters()` so each returned eye object has:
+This source chain was useful, but directly doubling `eye.renderWidth` did not produce visible half-SBS. It changed the backing canvas from `1868 x 994` to `3736 x 994`, but the canvas was then CSS-scaled back to the same on-screen size, visually canceling the intended horizontal compression.
+
+The current stable intervention point is still the live `getConfigCardboard()` path, but the patch changes only the fake-HMD projection matrices after `_frameData` is created:
 
 ```js
-renderWidth = Math.round(rawRenderWidth * 2)
-renderHeight = rawRenderHeight
+frameData.leftProjectionMatrix[0] *= 0.5
+frameData.rightProjectionMatrix[0] *= 0.5
 ```
 
 Verified in local Chrome on the coffee cup model:
 
 ```json
 {
-  "scriptVersion": "2026-05-18-live-cardboard-half-sbs",
-  "halfSbsMode": "live-cardboard-render-width",
-  "halfSbsCardboardViewport": {
-    "eye": "right",
-    "rawRenderWidth": 934,
-    "rawRenderHeight": 994,
-    "renderWidth": 1868,
-    "renderHeight": 994
+  "scriptVersion": "2026-05-18-live-cardboard-projection-half-sbs",
+  "halfSbsMode": "live-cardboard-projection",
+  "halfSbsProjectionPatch": {
+    "mode": "cardboard-frameData-projection",
+    "xScale": 0.5,
+    "left": {
+      "beforeM00": 1.2995447810825311,
+      "afterM00": 0.6497723905412656
+    },
+    "right": {
+      "beforeM00": 1.2995447810825311,
+      "afterM00": 0.6497723905412656
+    }
   },
   "canvas": {
-    "width": 3736,
+    "width": 1868,
     "height": 994
   }
 }
 ```
 
-The previous unpatched canvas for the same desktop run was `1868 x 994`, so the new path doubles the stereo framebuffer width while preserving height. This creates the expected half-SBS horizontal compression without touching material shaders or projection uniforms.
+The canvas size remains unchanged while the cup becomes visibly horizontally compressed in Chrome. This avoids the WebGL uniform hook and limits the projection change to Sketchfab's fake Cardboard frame data.
 
 ### Verified: `vr_stereo=0` disables stereo
 
@@ -475,7 +482,7 @@ Use `tools/sketchfab-sbs-inject.user.js` as a document-start prototype. It attem
 - Repeatedly switches the normal Settings navigation value back to Orbit.
 - Blocks device-orientation / VR pose event registration.
 - Hides the VR cursor/teleport proxy and blocks teleport activation.
-- Changes Cardboard stereo output toward half-SBS by doubling fake-HMD eye `renderWidth`.
+- Changes Cardboard stereo output toward half-SBS by scaling fake-HMD projection `m00`.
 - Patches shader source to remove VR distortion.
 - Optionally patches current webpack bundle internals so camera VR mode stays on Orbit instead of FPS.
 

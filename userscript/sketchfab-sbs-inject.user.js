@@ -34,9 +34,10 @@
 
   const HIDE_VR_WIDGETS = true;
   const HALF_SBS = true;
+  const HALF_SBS_PROJECTION_X_SCALE = 0.5;
   const RUNTIME_CLICK_GUARD = false;
   const TELEPORT_SHADER_GUARD = false;
-  const SCRIPT_VERSION = '2026-05-18-live-cardboard-half-sbs';
+  const SCRIPT_VERSION = '2026-05-18-live-cardboard-projection-half-sbs';
 
   const state = window.__skfbSbs = window.__skfbSbs || {
     scriptVersion: SCRIPT_VERSION,
@@ -51,13 +52,15 @@
     href: location.href,
     pageContext: true,
     webpackPushSeen: 0,
-    halfSbsMode: HALF_SBS ? 'live-cardboard-render-width' : 'off',
+    halfSbsMode: HALF_SBS ? 'live-cardboard-projection' : 'off',
     halfSbsCardboardViewport: null,
+    halfSbsProjectionPatch: null,
     lastOrbitAttempt: null
   };
   state.scriptVersion = SCRIPT_VERSION;
-  state.halfSbsMode = HALF_SBS ? 'live-cardboard-render-width' : 'off';
+  state.halfSbsMode = HALF_SBS ? 'live-cardboard-projection' : 'off';
   state.halfSbsCardboardViewport = state.halfSbsCardboardViewport || null;
+  state.halfSbsProjectionPatch = state.halfSbsProjectionPatch || null;
   state.blockedTeleportEvents = state.blockedTeleportEvents || [];
   state.runtimePatches = state.runtimePatches || [];
   state.shaderPatches = state.shaderPatches || [];
@@ -721,44 +724,41 @@
 
       const getConfigCardboard = target.getConfigCardboard;
 
-      function patchHmd(hmd) {
-        if (!hmd || hmd.__skfbSbsHalfSbsEyePatched || typeof hmd.getEyeParameters !== 'function') {
-          return hmd;
-        }
-
-        const getEyeParameters = hmd.getEyeParameters;
-        hmd.getEyeParameters = function patchedHalfSbsEyeParameters(eye) {
-          const params = getEyeParameters.call(this, eye);
-          if (!params || typeof params.renderWidth !== 'number') return params;
-
-          const scaled = Object.assign({}, params, {
-            renderWidth: Math.max(1, Math.round(params.renderWidth * 2))
-          });
-
-          state.halfSbsCardboardViewport = {
-            eye,
-            rawRenderWidth: params.renderWidth,
-            rawRenderHeight: params.renderHeight,
-            renderWidth: scaled.renderWidth,
-            renderHeight: scaled.renderHeight
-          };
-
-          return scaled;
+      function scaleProjectionMatrix(matrix, eye) {
+        if (!matrix || typeof matrix[0] !== 'number') return null;
+        const before = matrix[0];
+        matrix[0] = before * HALF_SBS_PROJECTION_X_SCALE;
+        return {
+          eye,
+          beforeM00: before,
+          afterM00: matrix[0]
         };
+      }
 
-        Object.defineProperty(hmd, '__skfbSbsHalfSbsEyePatched', { value: true });
-        return hmd;
+      function patchFrameData(owner) {
+        const frameData = owner && owner._frameData;
+        if (!frameData || frameData.__skfbSbsHalfSbsProjectionPatched) return;
+
+        const left = scaleProjectionMatrix(frameData.leftProjectionMatrix, 'left');
+        const right = scaleProjectionMatrix(frameData.rightProjectionMatrix, 'right');
+        Object.defineProperty(frameData, '__skfbSbsHalfSbsProjectionPatched', { value: true });
+
+        state.halfSbsProjectionPatch = {
+          mode: 'cardboard-frameData-projection',
+          xScale: HALF_SBS_PROJECTION_X_SCALE,
+          left,
+          right
+        };
       }
 
       target.getConfigCardboard = function patchedHalfSbsCardboardConfig() {
-        return patchHmd(getConfigCardboard.apply(this, arguments));
+        const hmd = getConfigCardboard.apply(this, arguments);
+        patchFrameData(this);
+        return hmd;
       };
 
       Object.defineProperty(target, '__skfbSbsHalfSbsCardboardPatched', { value: true });
-
-      try {
-        if (target._cardboardHMD) patchHmd(target._cardboardHMD);
-      } catch {}
+      patchFrameData(target);
 
       record(label);
     }
