@@ -36,7 +36,7 @@
   const HALF_SBS = true;
   const RUNTIME_CLICK_GUARD = false;
   const TELEPORT_SHADER_GUARD = false;
-  const SCRIPT_VERSION = '2026-05-18-safe-webpack-require';
+  const SCRIPT_VERSION = '2026-05-18-live-cardboard-half-sbs';
 
   const state = window.__skfbSbs = window.__skfbSbs || {
     scriptVersion: SCRIPT_VERSION,
@@ -51,9 +51,13 @@
     href: location.href,
     pageContext: true,
     webpackPushSeen: 0,
+    halfSbsMode: HALF_SBS ? 'live-cardboard-render-width' : 'off',
+    halfSbsCardboardViewport: null,
     lastOrbitAttempt: null
   };
   state.scriptVersion = SCRIPT_VERSION;
+  state.halfSbsMode = HALF_SBS ? 'live-cardboard-render-width' : 'off';
+  state.halfSbsCardboardViewport = state.halfSbsCardboardViewport || null;
   state.blockedTeleportEvents = state.blockedTeleportEvents || [];
   state.runtimePatches = state.runtimePatches || [];
   state.shaderPatches = state.shaderPatches || [];
@@ -519,19 +523,6 @@
       );
     }
 
-    if (HALF_SBS) {
-      replacements.push(
-        [
-          'this._updateCullConfig(g,c,h),U.Z.draw(),l.framebufferWidth=2*l.leftRenderWidth',
-          'this._updateCullConfig(g,c,h),l.leftProjection[0]*=.5,l.rightProjection[0]*=.5,U.Z.draw(),l.framebufferWidth=2*l.leftRenderWidth'
-        ],
-        [
-          'computeEyesOffsetViewMatrices(l.leftOffsetView,l.rightOffsetView,e),this._viewer.getInputManager().setParam("worldFactor",e),U.Z.draw()',
-          'computeEyesOffsetViewMatrices(l.leftOffsetView,l.rightOffsetView,e),l.leftProjection[0]*=.5,l.rightProjection[0]*=.5,this._viewer.getInputManager().setParam("worldFactor",e),U.Z.draw()'
-        ]
-      );
-    }
-
     for (const [from, to] of replacements) {
       if (src.includes(from)) {
         src = src.split(from).join(to);
@@ -724,8 +715,57 @@
       record('live cursor node methods');
     }
 
+    function patchCardboardHalfSbs(target, label) {
+      if (!HALF_SBS || !target || target.__skfbSbsHalfSbsCardboardPatched) return;
+      if (typeof target.getConfigCardboard !== 'function') return;
+
+      const getConfigCardboard = target.getConfigCardboard;
+
+      function patchHmd(hmd) {
+        if (!hmd || hmd.__skfbSbsHalfSbsEyePatched || typeof hmd.getEyeParameters !== 'function') {
+          return hmd;
+        }
+
+        const getEyeParameters = hmd.getEyeParameters;
+        hmd.getEyeParameters = function patchedHalfSbsEyeParameters(eye) {
+          const params = getEyeParameters.call(this, eye);
+          if (!params || typeof params.renderWidth !== 'number') return params;
+
+          const scaled = Object.assign({}, params, {
+            renderWidth: Math.max(1, Math.round(params.renderWidth * 2))
+          });
+
+          state.halfSbsCardboardViewport = {
+            eye,
+            rawRenderWidth: params.renderWidth,
+            rawRenderHeight: params.renderHeight,
+            renderWidth: scaled.renderWidth,
+            renderHeight: scaled.renderHeight
+          };
+
+          return scaled;
+        };
+
+        Object.defineProperty(hmd, '__skfbSbsHalfSbsEyePatched', { value: true });
+        return hmd;
+      }
+
+      target.getConfigCardboard = function patchedHalfSbsCardboardConfig() {
+        return patchHmd(getConfigCardboard.apply(this, arguments));
+      };
+
+      Object.defineProperty(target, '__skfbSbsHalfSbsCardboardPatched', { value: true });
+
+      try {
+        if (target._cardboardHMD) patchHmd(target._cardboardHMD);
+      } catch {}
+
+      record(label);
+    }
+
     function patchWebVrView(view) {
       if (!view) return;
+      patchCardboardHalfSbs(view, 'live half-sbs cardboard hmd');
       patchController(view._controllerMT);
       patchTeleportNode(view._teleportNode);
       patchCursorNode(view._cursorMT);
@@ -804,6 +844,7 @@
           proto.moveToHotspotWithIndex = function disabledPrototypeMoveToHotspot() {};
           proto.goToNextHotspot = function disabledPrototypeNextHotspot() {};
           proto.goToPrevHotspot = function disabledPrototypePrevHotspot() {};
+          patchCardboardHalfSbs(proto, 'export half-sbs cardboard prototype');
           Object.defineProperty(proto, '__skfbSbsWebVrViewPatched', { value: true });
           record('export webVR view prototype');
         }

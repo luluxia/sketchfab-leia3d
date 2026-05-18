@@ -14,14 +14,15 @@ This repository preserves the current working baseline for:
 Current userscript baseline:
 
 ```text
-2026-05-18-safe-webpack-require
+2026-05-18-live-cardboard-half-sbs
 ```
 
 Known state:
 
 - Teleport/cursor suppression works in the successful runtime patch path.
 - The `safeWebpackRequire` guard avoids the more destructive webpack timing failures seen in later experiments.
-- Half-SBS aspect correction is not solved yet. Later attempts involving WebGL projection uniforms, virtual viewport width, CullVisitor projection hooks, and webpack call capture were intentionally not kept in this baseline.
+- Half-SBS now uses a live Cardboard fake-HMD patch: `getEyeParameters()` returns double `renderWidth` while preserving height. Desktop Chrome verification changed the canvas backing size from `1868 x 994` to `3736 x 994`.
+- Earlier failed attempts involving WebGL projection uniforms, virtual viewport width, CullVisitor projection hooks, and webpack call capture were intentionally not kept in this baseline.
 
 ## Layout
 

@@ -14,3 +14,5 @@ local.properties
 
 node_modules/
 *.log
+
+analysis/

@@ -406,23 +406,58 @@ viewport(0, 0, leftRenderWidth, leftRenderHeight)
 viewport(leftRenderWidth, 0, leftRenderWidth, rightRenderHeight)
 ```
 
-So the viewport split is not the main problem. The missing step is projection aspect. The Cardboard projection is built for `leftRenderWidth / leftRenderHeight`; half-SBS wants a projection as if the eye were rendered for the full output width, roughly:
+So the viewport split is not the main problem. The first prototype tried to change projection aspect. The Cardboard projection is built for `leftRenderWidth / leftRenderHeight`; half-SBS wants a projection as if the eye were rendered for the full output width, roughly:
 
 ```js
 leftProjection[0] *= 0.5
 rightProjection[0] *= 0.5
 ```
 
-This widens the horizontal FOV used for each eye while keeping the same half-screen viewport, producing the horizontal compression expected by half-SBS. For asymmetric frusta, the center offset term should usually remain unchanged; the first prototype only scales `m00`.
+This widens the horizontal FOV used for each eye while keeping the same half-screen viewport, producing the horizontal compression expected by half-SBS. For asymmetric frusta, the center offset term should usually remain unchanged.
 
-Prototype status: the current userscript patches both the Cardboard/fake-HMD path and the native/XR-style eye-matrix path by inserting:
+That projection approach proved fragile during later testing. A WebGL uniform-level attempt caused the left eye to lose material/shading on the coffee cup test model.
+
+The current source finding is more useful: Cardboard render size does not come from `canvas.clientWidth`. The chain is:
 
 ```js
-leftProjection[0] *= 0.5
-rightProjection[0] *= 0.5
+Cu.getScreenWidth()  = max(window.screen.width, window.screen.height) * devicePixelRatio
+Cu.getScreenHeight() = min(window.screen.width, window.screen.height) * devicePixelRatio
+new Au({ width: Cu.getScreenWidth(), height: Cu.getScreenHeight(), ... })
+deviceInfo.getUndistortedViewportLeftEye()
+webVR.getConfigCardboard()
+cullConfig.leftRenderWidth = eye.renderWidth
+cullConfig.framebufferWidth = 2 * leftRenderWidth
+viewerOSGJS.computeCanvasSize() writes canvas.width = cullConfig.framebufferWidth
 ```
 
-immediately after Sketchfab updates the eye projections and before `draw()`. The anchors are confirmed to execute in Chrome. The visual effect is subtle on a normal monitor and should be calibrated on the actual naked-eye display; the current implementation uses a fixed `0.5` projection-scale factor as the first prototype.
+So the stable intervention point is the fake Cardboard HMD eye parameters, not the canvas resize hook. The current userscript wraps the live `webVR` view/prototype `getConfigCardboard()` and replaces `hmd.getEyeParameters()` so each returned eye object has:
+
+```js
+renderWidth = Math.round(rawRenderWidth * 2)
+renderHeight = rawRenderHeight
+```
+
+Verified in local Chrome on the coffee cup model:
+
+```json
+{
+  "scriptVersion": "2026-05-18-live-cardboard-half-sbs",
+  "halfSbsMode": "live-cardboard-render-width",
+  "halfSbsCardboardViewport": {
+    "eye": "right",
+    "rawRenderWidth": 934,
+    "rawRenderHeight": 994,
+    "renderWidth": 1868,
+    "renderHeight": 994
+  },
+  "canvas": {
+    "width": 3736,
+    "height": 994
+  }
+}
+```
+
+The previous unpatched canvas for the same desktop run was `1868 x 994`, so the new path doubles the stereo framebuffer width while preserving height. This creates the expected half-SBS horizontal compression without touching material shaders or projection uniforms.
 
 ### Verified: `vr_stereo=0` disables stereo
 
@@ -440,7 +475,7 @@ Use `tools/sketchfab-sbs-inject.user.js` as a document-start prototype. It attem
 - Repeatedly switches the normal Settings navigation value back to Orbit.
 - Blocks device-orientation / VR pose event registration.
 - Hides the VR cursor/teleport proxy and blocks teleport activation.
-- Optionally changes the stereo projection to half-SBS by scaling per-eye `m00`.
+- Changes Cardboard stereo output toward half-SBS by doubling fake-HMD eye `renderWidth`.
 - Patches shader source to remove VR distortion.
 - Optionally patches current webpack bundle internals so camera VR mode stays on Orbit instead of FPS.
 
