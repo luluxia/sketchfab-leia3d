@@ -10,7 +10,7 @@ class SbsWebViewHolder(context: Context) : FrameLayout(context) {
     val webView = SurfaceAwareWebView(context, null)
 
     private val inputSurface = Surface(interlacedView.inputSurfaceTexture)
-    private var interlacedMode = false
+    private var interlacedMode = true
 
     init {
         setBackgroundColor(Color.BLACK)
