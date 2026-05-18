@@ -1,5 +1,6 @@
 plugins {
     id "com.android.application"
+    id "org.jetbrains.kotlin.android"
 }
 
 android {
@@ -8,9 +9,34 @@ android {
 
     defaultConfig {
         applicationId "com.redmagic.sketchfabsbs"
-        minSdk 23
+        minSdk 30
         targetSdk 33
         versionCode 1
         versionName "0.1"
+
+        externalNativeBuild {
+            cmake {
+                abiFilters "arm64-v8a"
+            }
+        }
     }
+
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_1_8
+        targetCompatibility JavaVersion.VERSION_1_8
+    }
+
+    kotlinOptions {
+        jvmTarget = "1.8"
+    }
+
+    externalNativeBuild {
+        cmake {
+            path file("src/main/cpp/CMakeLists.txt")
+        }
+    }
+}
+
+dependencies {
+    implementation project(":leia-cnsdk")
 }

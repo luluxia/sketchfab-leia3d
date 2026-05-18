@@ -11,8 +11,12 @@ dependencyResolutionManagement {
     repositories {
         google()
         mavenCentral()
+        maven {
+            url "https://leiainc.jfrog.io/leiainc/gradle-release"
+        }
     }
 }
 
 rootProject.name = "SketchfabSbsWebView"
 include ":app"
+include ":leia-cnsdk"
