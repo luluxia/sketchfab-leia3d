@@ -40,6 +40,8 @@ class MainActivity : Activity() {
     private lateinit var bridge: CnsdkBridge
     private var injectionScript = ""
     private var viewerMode = false
+    private var cnsdkActive = false
+    private var viewerReadyGeneration = 0
     private var fpsUnlockGeneration = 0
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -56,7 +58,8 @@ class MainActivity : Activity() {
         injectionScript = readAsset("sketchfab-sbs-inject.user.js")
         bridge = CnsdkBridge(this)
         sbsHolder = SbsWebViewHolder(this)
-        setupWebView(sbsHolder.webView)
+        setupWebView(sbsHolder.browserWebView, isViewer = false)
+        setupWebView(sbsHolder.viewerWebView, isViewer = true)
         setContentView(sbsHolder)
         hideSystemUi()
         ensureCameraPermission()
@@ -68,13 +71,13 @@ class MainActivity : Activity() {
         hideSystemUi()
         bridge.onResume()
         sbsHolder.onResume()
-        if (viewerMode) {
+        if (cnsdkActive) {
             enableLeia3D()
         }
     }
 
     override fun onPause() {
-        if (viewerMode) {
+        if (cnsdkActive) {
             disableLeia3D()
         }
         bridge.onPause()
@@ -90,18 +93,13 @@ class MainActivity : Activity() {
     }
 
     override fun onBackPressed() {
-        val webView = sbsHolder.webView
-        if (isEmbedUrl(webView.url)) {
+        val browserWebView = sbsHolder.browserWebView
+        if (viewerMode) {
             leaveViewerMode()
-            if (webView.canGoBack()) {
-                webView.goBack()
-            } else {
-                webView.loadUrl(FEED_URL)
-            }
             return
         }
-        if (webView.canGoBack()) {
-            webView.goBack()
+        if (browserWebView.canGoBack()) {
+            browserWebView.goBack()
             return
         }
         super.onBackPressed()
@@ -114,7 +112,7 @@ class MainActivity : Activity() {
     }
 
     @SuppressLint("SetJavaScriptEnabled")
-    private fun setupWebView(webView: WebView) {
+    private fun setupWebView(webView: WebView, isViewer: Boolean) {
         WebView.setWebContentsDebuggingEnabled(true)
         webView.setBackgroundColor(Color.BLACK)
         webView.setLayerType(View.LAYER_TYPE_HARDWARE, null)
@@ -146,28 +144,27 @@ class MainActivity : Activity() {
         webView.webViewClient = object : WebViewClient() {
             override fun onPageStarted(view: WebView, url: String, favicon: Bitmap?) {
                 Log.i(TAG, "page started: $url")
-                if (isEmbedUrl(url)) {
-                    enterViewerMode()
+                if (isViewer && isEmbedUrl(url)) {
                     scheduleInjection("started")
-                } else {
-                    leaveViewerMode()
                 }
             }
 
             override fun onPageFinished(view: WebView, url: String) {
                 Log.i(TAG, "page finished: $url")
-                if (isEmbedUrl(url)) {
-                    enterViewerMode()
+                if (isViewer && isEmbedUrl(url)) {
                     scheduleInjection("finished")
+                    scheduleViewerReadyFallback("pageFinished", ++viewerReadyGeneration)
                 }
             }
 
             override fun shouldOverrideUrlLoading(view: WebView, request: WebResourceRequest): Boolean {
+                if (isViewer) return false
                 return interceptSketchfabModelUrl(request.url.toString())
             }
 
             @Deprecated("Deprecated in Android")
             override fun shouldOverrideUrlLoading(view: WebView, url: String): Boolean {
+                if (isViewer) return false
                 return interceptSketchfabModelUrl(url)
             }
         }
@@ -187,31 +184,57 @@ class MainActivity : Activity() {
             loadEmbed(modelId)
         } else {
             leaveViewerMode()
-            sbsHolder.webView.loadUrl(FEED_URL)
+            sbsHolder.browserWebView.loadUrl(FEED_URL)
         }
     }
 
     private fun loadEmbed(modelId: String) {
         enterViewerMode()
-        sbsHolder.webView.loadUrl(buildEmbedUrl(modelId))
+        sbsHolder.viewerWebView.loadUrl(buildEmbedUrl(modelId))
     }
 
     private fun enterViewerMode() {
-        if (viewerMode) {
-            return
+        viewerReadyGeneration++
+        if (cnsdkActive) {
+            cnsdkActive = false
+            disableLeia3D()
         }
         viewerMode = true
-        sbsHolder.setInterlacedMode(true)
-        enableLeia3D()
+        cnsdkActive = false
+        sbsHolder.showViewer2D()
     }
 
     private fun leaveViewerMode() {
         if (!viewerMode) {
             return
         }
+        viewerReadyGeneration++
         viewerMode = false
-        sbsHolder.setInterlacedMode(false)
-        disableLeia3D()
+        if (cnsdkActive) {
+            cnsdkActive = false
+            disableLeia3D()
+        }
+        sbsHolder.showBrowser()
+        sbsHolder.viewerWebView.stopLoading()
+        sbsHolder.viewerWebView.loadUrl("about:blank")
+    }
+
+    private fun onViewerReadyFor3D(reason: String) {
+        if (!viewerMode || cnsdkActive || !isEmbedUrl(sbsHolder.viewerWebView.url)) {
+            return
+        }
+        Log.i(TAG, "viewer ready for CNSDK 3D: $reason")
+        cnsdkActive = true
+        sbsHolder.showViewerInterlaced()
+        enableLeia3D()
+    }
+
+    private fun scheduleViewerReadyFallback(reason: String, generation: Int) {
+        handler.postDelayed({
+            if (viewerMode && !cnsdkActive && generation == viewerReadyGeneration) {
+                onViewerReadyFor3D("$reason fallback delay")
+            }
+        }, VIEWER_READY_FALLBACK_DELAY_MS)
     }
 
     private fun enableLeia3D() {
@@ -241,7 +264,7 @@ class MainActivity : Activity() {
     private fun scheduleFpsUnlockRetries(targetFps: Int, generation: Int) {
         FPS_UNLOCK_RETRY_DELAYS_MS.forEachIndexed { index, delayMs ->
             handler.postDelayed({
-                if (!viewerMode || generation != fpsUnlockGeneration || isFinishing || isDestroyed) {
+                if (!cnsdkActive || generation != fpsUnlockGeneration || isFinishing || isDestroyed) {
                     return@postDelayed
                 }
                 val result = VendorFrameTuning.requestSurfaceFpsUnlock(packageName, targetFps)
@@ -258,7 +281,7 @@ class MainActivity : Activity() {
     }
 
     private fun injectScript(reason: String, attempt: Int) {
-        val webView = sbsHolder.webView
+        val webView = sbsHolder.viewerWebView
         if (!isEmbedUrl(webView.url) || injectionScript.isEmpty()) {
             return
         }
@@ -271,13 +294,144 @@ class MainActivity : Activity() {
                 "webpackPushSeen:s.webpackPushSeen||0,readyState:document.readyState," +
                 "lastOrbitAttempt:s.lastOrbitAttempt||null,halfSbsMode:s.halfSbsMode||null});};" +
                 "if(window.__skfbSbs&&window.__skfbSbs.scriptVersion==='${SCRIPT_VERSION}'){" +
+                installViewerReadyProbeScript() + "\n" +
                 "return compact(true);}" +
                 "\n$injectionScript\n" +
+                installViewerReadyProbeScript() + "\n" +
                 "return compact(false);" +
                 "}catch(e){return 'ERROR:'+((e&&e.stack)||e);}})();"
         webView.evaluateJavascript(wrapped) { value ->
             Log.i(TAG, "inject $reason #$attempt: $value")
         }
+    }
+
+    private fun installViewerReadyProbeScript(): String {
+        return """
+            ;(function(){
+              if (window.__skfbLeiaReadyProbeVersion === '$SCRIPT_VERSION' && window.__skfbLeiaReadyProbeInstalled) return;
+              var done = false;
+              var sawLoadingUi = false;
+              var startedAt = Date.now();
+              function visible(el) {
+                if (!el || !el.getBoundingClientRect) return false;
+                var style = window.getComputedStyle(el);
+                if (!style || style.display === 'none' || style.visibility === 'hidden' || Number(style.opacity) === 0) return false;
+                var rect = el.getBoundingClientRect();
+                return rect.width > 1 && rect.height > 1;
+              }
+              function parsePercent(text) {
+                var match = String(text || '').match(/(\d+(?:\.\d+)?)\s*%/);
+                return match ? Number(match[1]) : NaN;
+              }
+              function inspectSketchfabLoadingUi() {
+                var selectors = [
+                  'main.viewer',
+                  '.loading-container',
+                  '.main-progress',
+                  '.main-progress-wrapper',
+                  '.main-progress-percentage.loading-percentage',
+                  '.main-progress-display',
+                  '.main-progress-display__progress',
+                  '.secondary-progress',
+                  '.secondary-progress-percentage'
+                ];
+                var candidates = Array.prototype.slice.call(document.querySelectorAll(selectors.join(',')));
+                var visibleLoading = 0;
+                var maxProgress = 0;
+                var samples = [];
+                for (var i = 0; i < candidates.length; i++) {
+                  var el = candidates[i];
+                  var isVisible = visible(el);
+                  var rawClassName = typeof el.className === 'string' ? el.className : String(el.getAttribute && el.getAttribute('class') || '');
+                  var rawText = String(el.textContent || '').replace(/\s+/g, ' ').trim();
+                  var percent = parsePercent(rawText);
+                  if (!isNaN(percent)) {
+                    maxProgress = Math.max(maxProgress, percent);
+                  }
+                  var looksLikeLoading = /(?:^|\s)(?:loading-container|main-progress|main-progress-wrapper|secondary-progress)(?:\s|$)/.test(rawClassName);
+                  if (isVisible && looksLikeLoading) visibleLoading++;
+                  if (samples.length < 18) {
+                    samples.push({
+                      tag: String(el.tagName || '').toLowerCase(),
+                      className: rawClassName.slice(0, 160),
+                      id: String(el.id || '').slice(0, 80),
+                      role: String(el.getAttribute && el.getAttribute('role') || ''),
+                      ariaValueNow: String(el.getAttribute && el.getAttribute('aria-valuenow') || ''),
+                      ariaValueText: String(el.getAttribute && el.getAttribute('aria-valuetext') || ''),
+                      text: rawText.slice(0, 120),
+                      visible: isVisible,
+                      parsedPercent: isNaN(percent) ? null : percent
+                    });
+                  }
+                }
+                if (visibleLoading > 0 || maxProgress > 0) sawLoadingUi = true;
+                var viewer = document.querySelector('main.viewer');
+                var viewerClass = viewer ? String(viewer.className || '') : '';
+                return {
+                  visibleLoading: visibleLoading,
+                  maxProgress: maxProgress,
+                  viewerClass: viewerClass,
+                  modelLoaded: /\bmodel-loaded\b/.test(viewerClass),
+                  modelLoading: /\bmodel-loading\b/.test(viewerClass),
+                  samples: samples
+                };
+              }
+              function notify(reason, details) {
+                if (done) return;
+                done = true;
+                var s = window.__skfbSbs || {};
+                var canvas = document.querySelector('canvas');
+                if (window.CNSDKBridge && window.CNSDKBridge.viewerReadyFor3D) {
+                  window.CNSDKBridge.viewerReadyFor3D(JSON.stringify(Object.assign({
+                    source: 'loading-ui-probe',
+                    reason: reason,
+                    elapsedMs: Date.now() - startedAt,
+                    readyState: document.readyState,
+                    canvasWidth: canvas ? canvas.width : 0,
+                    canvasHeight: canvas ? canvas.height : 0,
+                    patchedModules: s.patchedModules || [],
+                    webpackPushSeen: s.webpackPushSeen || 0
+                  }, details || {})));
+                }
+              }
+              function tick(){
+                if (done) return;
+                var s = window.__skfbSbs || {};
+                var modules = s.patchedModules || [];
+                var canvas = document.querySelector('canvas');
+                var baseReady = document.readyState === 'complete' &&
+                  !!canvas && canvas.width > 0 && canvas.height > 0 &&
+                  modules.indexOf('U6YP') !== -1 &&
+                  (s.webpackPushSeen || 0) > 0;
+                var loading = inspectSketchfabLoadingUi();
+                if (baseReady && loading.maxProgress >= 99) {
+                  notify('progress-complete', loading);
+                  return;
+                }
+                if (baseReady && loading.modelLoaded && sawLoadingUi) {
+                  notify('model-loaded-class', loading);
+                  return;
+                }
+                if (baseReady && sawLoadingUi && loading.visibleLoading === 0) {
+                  notify('loading-ui-hidden', loading);
+                  return;
+                }
+                setTimeout(tick, 120);
+              }
+              function install() {
+                if (!document.documentElement) {
+                  setTimeout(install, 50);
+                  return;
+                }
+                window.__skfbLeiaReadyProbeVersion = '$SCRIPT_VERSION';
+                window.__skfbLeiaReadyProbeInstalled = true;
+                var observer = new MutationObserver(tick);
+                observer.observe(document.documentElement, { childList: true, subtree: true, attributes: true, attributeFilter: ['class', 'style'] });
+                tick();
+              }
+              install();
+            })();
+        """.trimIndent()
     }
 
     private fun extractSketchfabModelId(url: String?): String? {
@@ -406,6 +560,13 @@ class MainActivity : Activity() {
             }
         }
 
+        @JavascriptInterface
+        fun viewerReadyFor3D(reason: String) {
+            activity.runOnUiThread {
+                (activity as? MainActivity)?.onViewerReadyFor3D(reason)
+            }
+        }
+
         fun onResume() {
             sdk?.onResume()
         }
@@ -453,6 +614,7 @@ class MainActivity : Activity() {
                 "&navigation=orbit&vr_ar=1"
         private const val CAMERA_REQUEST_CODE = 42
         private const val TARGET_REFRESH_RATE = 144f
+        private const val VIEWER_READY_FALLBACK_DELAY_MS = 7000L
         private val FPS_UNLOCK_RETRY_DELAYS_MS = longArrayOf(1200L, 2200L, 3400L, 4800L)
         private val MODEL_ID_AT_END = Pattern.compile("([0-9a-fA-F]{32})(?:/)?$")
         private val DIRECT_MODEL_PATH = Pattern.compile("^/models/([0-9a-fA-F]{32})/?$")

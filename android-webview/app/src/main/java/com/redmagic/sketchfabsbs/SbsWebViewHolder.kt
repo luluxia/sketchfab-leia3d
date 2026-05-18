@@ -7,7 +7,10 @@ import android.widget.FrameLayout
 
 class SbsWebViewHolder(context: Context) : FrameLayout(context) {
     val interlacedView = SbsLeiaSurfaceView(context)
-    val webView = SurfaceAwareWebView(context, null)
+    val browserWebView = SurfaceAwareWebView(context, null)
+    val viewerWebView = SurfaceAwareWebView(context, null)
+    val webView: SurfaceAwareWebView
+        get() = browserWebView
 
     private val inputSurface = Surface(interlacedView.inputSurfaceTexture)
     private var interlacedMode = true
@@ -15,10 +18,15 @@ class SbsWebViewHolder(context: Context) : FrameLayout(context) {
     init {
         setBackgroundColor(Color.BLACK)
 
-        webView.setBackgroundColor(Color.BLACK)
+        browserWebView.setBackgroundColor(Color.BLACK)
+        viewerWebView.setBackgroundColor(Color.BLACK)
 
         addView(
-            webView,
+            browserWebView,
+            LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.MATCH_PARENT)
+        )
+        addView(
+            viewerWebView,
             LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.MATCH_PARENT)
         )
         addView(
@@ -40,11 +48,13 @@ class SbsWebViewHolder(context: Context) : FrameLayout(context) {
 
     fun onResume() {
         interlacedView.onResume()
-        webView.onResume()
+        browserWebView.onResume()
+        viewerWebView.onResume()
     }
 
     fun onPause() {
-        webView.onPause()
+        browserWebView.onPause()
+        viewerWebView.onPause()
         interlacedView.onPause()
     }
 
@@ -52,13 +62,35 @@ class SbsWebViewHolder(context: Context) : FrameLayout(context) {
         if (interlacedMode == enabled) return
         interlacedMode = enabled
         if (enabled) {
-            routeWebViewToCnsdk()
+            showViewerInterlaced()
         } else {
-            webView.surface = null
-            interlacedView.visibility = GONE
-            webView.bringToFront()
-            webView.invalidate()
+            showBrowser()
         }
+    }
+
+    fun showBrowser() {
+        interlacedMode = false
+        viewerWebView.surface = null
+        interlacedView.visibility = GONE
+        viewerWebView.visibility = GONE
+        browserWebView.visibility = VISIBLE
+        browserWebView.bringToFront()
+        browserWebView.invalidate()
+    }
+
+    fun showViewer2D() {
+        interlacedMode = false
+        viewerWebView.surface = null
+        interlacedView.visibility = GONE
+        browserWebView.visibility = GONE
+        viewerWebView.visibility = VISIBLE
+        viewerWebView.bringToFront()
+        viewerWebView.invalidate()
+    }
+
+    fun showViewerInterlaced() {
+        interlacedMode = true
+        routeWebViewToCnsdk()
     }
 
     fun toggleSdkDebugGui() {
@@ -70,10 +102,12 @@ class SbsWebViewHolder(context: Context) : FrameLayout(context) {
     }
 
     private fun routeWebViewToCnsdk() {
-        webView.surface = inputSurface
+        browserWebView.visibility = GONE
+        viewerWebView.visibility = VISIBLE
+        viewerWebView.surface = inputSurface
         interlacedView.visibility = VISIBLE
         interlacedView.bringToFront()
-        webView.invalidate()
+        viewerWebView.invalidate()
     }
 
     private fun resize() {
@@ -81,8 +115,10 @@ class SbsWebViewHolder(context: Context) : FrameLayout(context) {
     }
 
     fun destroy() {
-        webView.surface = null
-        webView.destroy()
+        browserWebView.surface = null
+        viewerWebView.surface = null
+        browserWebView.destroy()
+        viewerWebView.destroy()
         inputSurface.release()
         interlacedView.inputSurfaceTexture.release()
     }
