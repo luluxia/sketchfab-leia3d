@@ -1,0 +1,16 @@
+.gradle/
+build/
+app/build/
+local.properties
+
+*.apk
+*.aab
+*.ap_
+*.dex
+*.class
+
+*.iml
+.idea/
+
+node_modules/
+*.log

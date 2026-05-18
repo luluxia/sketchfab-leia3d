@@ -1,0 +1,16 @@
+plugins {
+    id "com.android.application"
+}
+
+android {
+    namespace "com.redmagic.sketchfabsbs"
+    compileSdk 33
+
+    defaultConfig {
+        applicationId "com.redmagic.sketchfabsbs"
+        minSdk 23
+        targetSdk 33
+        versionCode 1
+        versionName "0.1"
+    }
+}
