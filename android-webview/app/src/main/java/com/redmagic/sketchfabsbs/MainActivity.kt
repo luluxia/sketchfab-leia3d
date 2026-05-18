@@ -4,6 +4,7 @@ import android.Manifest
 import android.annotation.SuppressLint
 import android.app.Activity
 import android.content.Context
+import android.content.Intent
 import android.content.pm.PackageManager
 import android.graphics.Bitmap
 import android.graphics.Color
@@ -51,15 +52,15 @@ class MainActivity : Activity() {
         )
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         preferRefreshRate(TARGET_REFRESH_RATE)
-        hideSystemUi()
 
         injectionScript = readAsset("sketchfab-sbs-inject.user.js")
         bridge = CnsdkBridge(this)
         sbsHolder = SbsWebViewHolder(this)
         setupWebView(sbsHolder.webView)
         setContentView(sbsHolder)
+        hideSystemUi()
         ensureCameraPermission()
-        sbsHolder.webView.loadUrl(FEED_URL)
+        loadInitialUrl(intent)
     }
 
     override fun onResume() {
@@ -104,6 +105,12 @@ class MainActivity : Activity() {
             return
         }
         super.onBackPressed()
+    }
+
+    override fun onNewIntent(intent: Intent?) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        loadInitialUrl(intent)
     }
 
     @SuppressLint("SetJavaScriptEnabled")
@@ -171,6 +178,17 @@ class MainActivity : Activity() {
         Log.i(TAG, "intercept model detail: $url -> $modelId")
         loadEmbed(modelId)
         return true
+    }
+
+    private fun loadInitialUrl(intent: Intent?) {
+        val modelId = extractSketchfabModelId(intent?.dataString)
+        if (modelId != null) {
+            Log.i(TAG, "launch with model detail intent -> $modelId")
+            loadEmbed(modelId)
+        } else {
+            leaveViewerMode()
+            sbsHolder.webView.loadUrl(FEED_URL)
+        }
     }
 
     private fun loadEmbed(modelId: String) {
@@ -326,7 +344,7 @@ class MainActivity : Activity() {
 
     private fun hideSystemUi() {
         window.setDecorFitsSystemWindows(false)
-        window.insetsController?.apply {
+        window.decorView.windowInsetsController?.apply {
             systemBarsBehavior = WindowInsetsController.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
             hide(WindowInsets.Type.systemBars())
         }
