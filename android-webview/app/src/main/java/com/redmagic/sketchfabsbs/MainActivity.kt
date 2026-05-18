@@ -311,6 +311,9 @@ class MainActivity : Activity() {
               if (window.__skfbLeiaReadyProbeVersion === '$SCRIPT_VERSION' && window.__skfbLeiaReadyProbeInstalled) return;
               var done = false;
               var sawLoadingUi = false;
+              var progressComplete = false;
+              var progressLeftViewport = false;
+              var observedProgressElements = [];
               var startedAt = Date.now();
               function visible(el) {
                 if (!el || !el.getBoundingClientRect) return false;
@@ -319,9 +322,37 @@ class MainActivity : Activity() {
                 var rect = el.getBoundingClientRect();
                 return rect.width > 1 && rect.height > 1;
               }
+              function describeElement(el) {
+                if (!el) return null;
+                var rawClassName = typeof el.className === 'string' ? el.className : String(el.getAttribute && el.getAttribute('class') || '');
+                var rawText = String(el.textContent || '').replace(/\s+/g, ' ').trim();
+                return {
+                  tag: String(el.tagName || '').toLowerCase(),
+                  className: rawClassName.slice(0, 160),
+                  id: String(el.id || '').slice(0, 80),
+                  text: rawText.slice(0, 120),
+                  visible: visible(el),
+                  connected: !!el.isConnected,
+                  parsedPercent: parsePercent(rawText)
+                };
+              }
               function parsePercent(text) {
                 var match = String(text || '').match(/(\d+(?:\.\d+)?)\s*%/);
                 return match ? Number(match[1]) : NaN;
+              }
+              function baseReadyNow() {
+                var s = window.__skfbSbs || {};
+                var modules = s.patchedModules || [];
+                var canvas = document.querySelector('canvas');
+                return document.readyState === 'complete' &&
+                  !!canvas && canvas.width > 0 && canvas.height > 0 &&
+                  modules.indexOf('U6YP') !== -1 &&
+                  (s.webpackPushSeen || 0) > 0;
+              }
+              function notifyIfReady(reason, details) {
+                if (!baseReadyNow()) return false;
+                notify(reason, details);
+                return true;
               }
               function inspectSketchfabLoadingUi() {
                 var selectors = [
@@ -350,6 +381,12 @@ class MainActivity : Activity() {
                   }
                   var looksLikeLoading = /(?:^|\s)(?:loading-container|main-progress|main-progress-wrapper|secondary-progress)(?:\s|$)/.test(rawClassName);
                   if (isVisible && looksLikeLoading) visibleLoading++;
+                  if (isVisible && looksLikeLoading && observedProgressElements.indexOf(el) === -1) {
+                    observedProgressElements.push(el);
+                    if (window.__skfbLeiaProgressIntersectionObserver) {
+                      window.__skfbLeiaProgressIntersectionObserver.observe(el);
+                    }
+                  }
                   if (samples.length < 18) {
                     samples.push({
                       tag: String(el.tagName || '').toLowerCase(),
@@ -365,11 +402,14 @@ class MainActivity : Activity() {
                   }
                 }
                 if (visibleLoading > 0 || maxProgress > 0) sawLoadingUi = true;
+                if (maxProgress >= 99) progressComplete = true;
                 var viewer = document.querySelector('main.viewer');
                 var viewerClass = viewer ? String(viewer.className || '') : '';
                 return {
                   visibleLoading: visibleLoading,
                   maxProgress: maxProgress,
+                  progressComplete: progressComplete,
+                  observedProgressElements: observedProgressElements.length,
                   viewerClass: viewerClass,
                   modelLoaded: /\bmodel-loaded\b/.test(viewerClass),
                   modelLoading: /\bmodel-loading\b/.test(viewerClass),
@@ -396,25 +436,20 @@ class MainActivity : Activity() {
               }
               function tick(){
                 if (done) return;
-                var s = window.__skfbSbs || {};
-                var modules = s.patchedModules || [];
-                var canvas = document.querySelector('canvas');
-                var baseReady = document.readyState === 'complete' &&
-                  !!canvas && canvas.width > 0 && canvas.height > 0 &&
-                  modules.indexOf('U6YP') !== -1 &&
-                  (s.webpackPushSeen || 0) > 0;
                 var loading = inspectSketchfabLoadingUi();
-                if (baseReady && loading.maxProgress >= 99) {
-                  notify('progress-complete', loading);
+                if (progressLeftViewport && notifyIfReady('progress-intersection-hidden', loading)) {
                   return;
                 }
-                if (baseReady && loading.modelLoaded && sawLoadingUi) {
-                  notify('model-loaded-class', loading);
+                if (sawLoadingUi && progressComplete && loading.visibleLoading === 0 && notifyIfReady('progress-dom-hidden', loading)) {
                   return;
                 }
-                if (baseReady && sawLoadingUi && loading.visibleLoading === 0) {
-                  notify('loading-ui-hidden', loading);
-                  return;
+                for (var i = 0; i < observedProgressElements.length; i++) {
+                  var el = observedProgressElements[i];
+                  if (el && (!el.isConnected || !visible(el))) {
+                    if (notifyIfReady('progress-element-hidden', Object.assign(loading, { hiddenElement: describeElement(el) }))) {
+                      return;
+                    }
+                  }
                 }
                 setTimeout(tick, 120);
               }
@@ -425,6 +460,23 @@ class MainActivity : Activity() {
                 }
                 window.__skfbLeiaReadyProbeVersion = '$SCRIPT_VERSION';
                 window.__skfbLeiaReadyProbeInstalled = true;
+                window.__skfbLeiaProgressIntersectionObserver = 'IntersectionObserver' in window ? new IntersectionObserver(function(entries) {
+                  for (var i = 0; i < entries.length; i++) {
+                    var entry = entries[i];
+                    if (sawLoadingUi && (entry.isIntersecting === false || entry.intersectionRatio <= 0)) {
+                      progressLeftViewport = true;
+                      if (notifyIfReady('progress-intersection-hidden', Object.assign(inspectSketchfabLoadingUi(), {
+                        intersection: {
+                          isIntersecting: entry.isIntersecting,
+                          intersectionRatio: entry.intersectionRatio
+                        },
+                        hiddenElement: describeElement(entry.target)
+                      }))) {
+                        return;
+                      }
+                    }
+                  }
+                }, { threshold: [0, 0.01] }) : null;
                 var observer = new MutationObserver(tick);
                 observer.observe(document.documentElement, { childList: true, subtree: true, attributes: true, attributeFilter: ['class', 'style'] });
                 tick();
@@ -614,7 +666,7 @@ class MainActivity : Activity() {
                 "&navigation=orbit&vr_ar=1"
         private const val CAMERA_REQUEST_CODE = 42
         private const val TARGET_REFRESH_RATE = 144f
-        private const val VIEWER_READY_FALLBACK_DELAY_MS = 7000L
+        private const val VIEWER_READY_FALLBACK_DELAY_MS = 20000L
         private val FPS_UNLOCK_RETRY_DELAYS_MS = longArrayOf(1200L, 2200L, 3400L, 4800L)
         private val MODEL_ID_AT_END = Pattern.compile("([0-9a-fA-F]{32})(?:/)?$")
         private val DIRECT_MODEL_PATH = Pattern.compile("^/models/([0-9a-fA-F]{32})/?$")
