@@ -283,7 +283,8 @@ class MainActivity : Activity() {
                 "patchedModules:s.patchedModules||[],runtimePatches:s.runtimePatches||[]," +
                 "blockedEvents:(s.blockedEvents||[]).length,forcedOrbit:s.forcedOrbit||0," +
                 "webpackPushSeen:s.webpackPushSeen||0,readyState:document.readyState," +
-                "lastOrbitAttempt:s.lastOrbitAttempt||null,halfSbsMode:s.halfSbsMode||null});};" +
+                "lastOrbitAttempt:s.lastOrbitAttempt||null,lastOrbitLoadedProbe:s.lastOrbitLoadedProbe||null," +
+                "forcedOrbitTriggeredBy:s.forcedOrbitTriggeredBy||null,halfSbsMode:s.halfSbsMode||null});};" +
                 "if(window.__skfbSbs&&window.__skfbSbs.scriptVersion==='${SCRIPT_VERSION}'){" +
                 installViewerReadyProbeScript() + "\n" +
                 "return compact(true);}" +
@@ -519,7 +520,7 @@ class MainActivity : Activity() {
     companion object {
         private const val TAG = "SketchfabLeia3D"
         private const val FEED_URL = "https://sketchfab.com/feed"
-        private const val SCRIPT_VERSION = "2026-05-18-live-cardboard-projection-half-sbs"
+        private const val SCRIPT_VERSION = "2026-05-18-model-loaded-orbit"
         private const val EMBED_QUERY =
             "autostart=1&internal=1&tracking=0&ui_ar=0&ui_infos=0&ui_snapshots=1" +
                 "&ui_stop=0&ui_theatre=1&ui_watermark=0&cardboard=1&vr_stereo=1" +

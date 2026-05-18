@@ -37,7 +37,7 @@
   const HALF_SBS_PROJECTION_X_SCALE = 0.5;
   const RUNTIME_CLICK_GUARD = false;
   const TELEPORT_SHADER_GUARD = false;
-  const SCRIPT_VERSION = '2026-05-18-live-cardboard-projection-half-sbs';
+  const SCRIPT_VERSION = '2026-05-18-model-loaded-orbit';
 
   const state = window.__skfbSbs = window.__skfbSbs || {
     scriptVersion: SCRIPT_VERSION,
@@ -251,6 +251,8 @@
     return true;
   }
 
+  let orbitTimer = null;
+
   function forceOrbitViaSettings() {
     const viewerMode = document.querySelector('[data-setting="viewerMode"]');
     const value = viewerMode && viewerMode.querySelector('.setting-value');
@@ -288,13 +290,19 @@
     return false;
   }
 
-  function keepOrbitEnabled() {
+  function keepOrbitEnabled(trigger = 'manual') {
+    if (orbitTimer) {
+      clearInterval(orbitTimer);
+      orbitTimer = null;
+    }
     let attempts = 0;
-    const timer = setInterval(() => {
+    orbitTimer = setInterval(() => {
       attempts += 1;
       state.lastOrbitAttempt = {
         attempts,
+        trigger,
         readyState: document.readyState,
+        viewerClass: String((document.querySelector('main[aria-label="sketchfab-viewer"],main.viewer') || {}).className || ''),
         hasViewerMode: !!document.querySelector('[data-setting="viewerMode"]'),
         hasOrbitOption: !!(
           document.querySelector('[data-setting="viewerMode"] [data-value="0"]') ||
@@ -303,8 +311,55 @@
         )
       };
       const ok = forceOrbitViaSettings();
-      if (ok || attempts > 120) clearInterval(timer);
+      if (ok || attempts > 120) {
+        clearInterval(orbitTimer);
+        orbitTimer = null;
+      }
     }, 500);
+  }
+
+  function installOrbitAfterModelLoaded() {
+    if (window.__skfbSbsOrbitModelLoadedObserver) return;
+
+    let triggered = false;
+    const getViewerMain = () => document.querySelector('main[aria-label="sketchfab-viewer"],main.viewer');
+    const tryStart = (source) => {
+      if (triggered) return true;
+      const viewer = getViewerMain();
+      const viewerClass = viewer ? String(viewer.className || '') : '';
+      state.lastOrbitLoadedProbe = {
+        source,
+        readyState: document.readyState,
+        viewerClass,
+        modelLoaded: /\bmodel-loaded\b/.test(viewerClass)
+      };
+      if (!viewer || !/\bmodel-loaded\b/.test(viewerClass)) return false;
+      triggered = true;
+      state.forcedOrbitTriggeredBy = 'main.model-loaded';
+      log('main.model-loaded detected; starting Orbit switch');
+      keepOrbitEnabled('main.model-loaded');
+      return true;
+    };
+
+    const install = () => {
+      if (!document.documentElement) {
+        setTimeout(install, 50);
+        return;
+      }
+      if (tryStart('install')) return;
+      const observer = new MutationObserver(() => {
+        if (tryStart('mutation')) observer.disconnect();
+      });
+      observer.observe(document.documentElement, {
+        childList: true,
+        subtree: true,
+        attributes: true,
+        attributeFilter: ['class']
+      });
+      window.__skfbSbsOrbitModelLoadedObserver = observer;
+    };
+
+    install();
   }
 
   function patchWebGLDistortion() {
@@ -870,13 +925,7 @@
   patchOsgVrWidgetNodes();
   patchWebpackChunks();
   patchWebpackRuntimeExports();
-  keepOrbitEnabled();
-  if (document.readyState === 'loading') {
-    document.addEventListener('DOMContentLoaded', keepOrbitEnabled, { once: true });
-    window.addEventListener('load', keepOrbitEnabled, { once: true });
-  } else {
-    keepOrbitEnabled();
-  }
+  installOrbitAfterModelLoaded();
   log('prototype installed');
   setTimeout(() => {
     if (!state.patchedModules.length) {
